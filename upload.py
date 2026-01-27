@@ -1,16 +1,17 @@
 import asyncio
 from asyncio import Queue
+from pathlib import Path
+from typing import cast
 
 from playwright.async_api import async_playwright
 from playwright.async_api import Page, Browser, BrowserContext
+from playwright._impl._api_structures import Cookie, SetCookieParam
 
 import aiosqlite
-from aiosqlite import Connection
 
-from scrape.user import validate_cookies
+from scrape.user import validate_cookies, upload_video
+from dao.user import create_table, all_users, insert_user, create_table
 from dao.user import User
-from dao.user import create_table, all_users
-from utils import cookies2plawrightfmt
 
 
 MAX_PAGES = 1
@@ -30,24 +31,32 @@ async def main():
         aiosqlite.connect('data.db') as conn,
         async_playwright() as p
     ):
+        # await create_table(conn)
+        # await insert_user(conn, 15929265379)
+        # await insert_user(conn, 19565291025)
         browser: Browser = await p.chromium.launch(headless=False)
         await create_table(conn)
         users: list[User] = await all_users(conn)
+        users = [user for user in users if user.phone.startswith('195')]
         user_pages: list[tuple[Page, User]] = []
         for user in users:
-            cookies = user.cookies
-            ctx = await browser.new_context()
-            if cookies is not None:
-                await ctx.add_cookies(cookies2plawrightfmt(cookies))
-            page = await ctx.new_page()
+            cookies: list[Cookie] = user.cookies
+            ctx: BrowserContext = await browser.new_context()
+            if len(cookies):
+                # all the required keys of Cookies are all appear in SetCookieParam
+                # so we can safely cast it.
+                await ctx.add_cookies(
+                    cast(list[SetCookieParam], cookies)
+                )
+            page: Page = await ctx.new_page()
             user_pages.append((page, user))
         validate_cookies_tasks = [
             validate_cookies(page, user, conn)
             for page, user in user_pages
         ]
         await asyncio.gather(*validate_cookies_tasks)
-        # await insert_user(conn, 15929265379)
-        # await insert_user(conn, 19565291025)
+        await upload_video(*user_pages[0], Path() / 'videos' / '20260127_021412.mp4')
+        
         
 
 if __name__ == '__main__':

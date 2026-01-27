@@ -1,20 +1,18 @@
-from typing import AsyncIterator
 import asyncio
 from asyncio import Queue, Semaphore
-from contextlib import asynccontextmanager
 from urllib.parse import unquote
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
 import time
 
-from playwright.async_api import async_playwright
-from playwright.async_api import Page, Browser
+from playwright.async_api import Page
 from bs4 import BeautifulSoup, Tag
 from aiohttp import ClientSession
 import aiofiles
 
+from utils import queue_elem
 
-DEBUG = True
+
 MAX_PAGES = 3
 DOMAIN = 'https://www.toutiao.com'
 WAIT_TIME = 1000000
@@ -22,20 +20,8 @@ AIO_HTTP_SEM = Semaphore(3)
 
 
 LOGGER = getLogger(__name__)
-LOGGER.setLevel('DEBUG' if DEBUG else 'INFO')
+LOGGER.setLevel('INFO')
 basicConfig(level=INFO)
-
-
-@asynccontextmanager
-async def queue_elem[T](queue: Queue[T]) -> AsyncIterator[T]:
-    '''
-    异步上下文管理器，用于从队列中获取元素，并在完成后放回队列中
-
-    :param queue: 队列
-    '''
-    elem: T = await queue.get()
-    yield elem
-    await queue.put(elem)
 
 
 def _a_tag2url(a_tag: Tag) -> str:
@@ -67,8 +53,13 @@ async def search(page_queue: Queue[Page], keyword: str, page_num: int) -> list[s
     async with queue_elem(page_queue) as page:
         await page.goto(url, wait_until='domcontentloaded', timeout=WAIT_TIME)
         await asyncio.sleep(3)
+        # 昨天还没遇到反爬，今天这里弹出滑块验证码了
+        # await page.pause()
+        # 怎么又没有了？？？
+        locator = page.locator('a.text-underline-hover').filter(visible=True).first
+        await locator.wait_for(timeout=WAIT_TIME)
         html_content = await page.content()
-    LOGGER.debug(f'Got all html content, parsing...')
+    LOGGER.info(f'Got all html content, parsing...')
     soup = BeautifulSoup(html_content, 'lxml')
     a_tags = soup.select('a.text-underline-hover')
     urls: list[str] = [
@@ -96,8 +87,10 @@ async def fetch_download_link(page_queue: Queue[Page], url: str) -> str:
     async with queue_elem(page_queue) as page:
         await page.goto(url, wait_until='domcontentloaded', timeout=WAIT_TIME)
         await asyncio.sleep(3)
+        locator = page.locator('#root')
+        await locator.wait_for()
         html_content = await page.content()
-    LOGGER.debug(f'Got all html content, parsing...')
+    LOGGER.info(f'Got all html content, parsing...')
     soup = BeautifulSoup(html_content, 'lxml')
     video_tag = soup.select_one('#root video')
     if video_tag is None:
@@ -118,6 +111,8 @@ async def download_https_video(session: ClientSession, url: str, save_dir: Path)
     下载https协议的视频
     :return: 是否成功下载 
     '''
+    if url == 'https://www.toutiao.com/':
+        return False
     if not save_dir.exists():
         save_dir.mkdir(parents=True)
     async with AIO_HTTP_SEM, session.get(url) as response:
@@ -148,44 +143,9 @@ async def download_blob_video(session: ClientSession, url: str, save_dir: Path) 
     下载blob协议的视频
     :return: 是否成功下载 
     '''
-    # use playwright to download blob video
+    # TODO: implement this
+    # use playwright to record the http response.
     if not save_dir.exists():
         save_dir.mkdir(parents=True)
     return False
-
-
-async def main():
-    async with async_playwright() as p:
-        browser: Browser = await p.chromium.launch(headless=not DEBUG)
-        page_queue: Queue = Queue()
-        for _ in range(MAX_PAGES):
-            page: Page = await browser.new_page()
-            await page_queue.put(page)
-        search_tasks = [
-            search(page_queue, '原神', 0)
-        ]
-        results = await asyncio.gather(*search_tasks)
-        fetch_download_url_tasks = []
-        for result in results:
-            for url in result:
-                fetch_download_url_tasks.append(fetch_download_link(page_queue, url))
-        download_urls = await asyncio.gather(*fetch_download_url_tasks)
-        await browser.close()
-        async with ClientSession() as session:
-            download_urls = [
-                url
-                for url in download_urls
-                if len(url)
-            ]
-            download_tasks = [
-                download_https_video(session, url, Path('download'))\
-                if url.startswith('https')\
-                else download_blob_video(session, url, Path('download'))
-                for url in download_urls
-            ]
-            await asyncio.gather(*download_tasks)
-
-
-if __name__ == '__main__':
-    asyncio.run(main())
 

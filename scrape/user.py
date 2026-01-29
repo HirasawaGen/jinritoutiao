@@ -10,7 +10,7 @@ from playwright.async_api import expect
 from aiosqlite import Connection
 
 from dao.user import User
-from dao.user import update_cookies
+from dao.user import update_cookies, insert_user
 from utils import queue_elem, is_login
 
 
@@ -25,7 +25,7 @@ basicConfig(level=INFO)
 
 
 # TODO: add semaphore to limit concurrent requests
-async def validate_cookies(page: Page, user: User, conn: Connection):
+async def validate_cookies(page: Page, user: User, conn: Connection) -> User:
     '''
     验证cookies是否存在且有效，不存在则登录账号，无效则更新cookies
 
@@ -34,50 +34,83 @@ async def validate_cookies(page: Page, user: User, conn: Connection):
     但是第一次登录后，直到cookie过期前都不需要再次登录。
 
     FIXME: 有可能www.toutiao.com的cookies没过期，但是mp.toutiao.com的cookies过期了，代码没有考虑到这种情况，得改改。
+    这个代码保存新帐号的cookies的功能应该没什么问题了，但是更新cookies的功能还需要改。
     '''
     phone = user.phone
     url = page.url
-    cookies_www = user.cookies
+    cookies = user.cookies
     if url != DOMAIN_WWW:
-        await page.goto(DOMAIN_WWW, wait_until='domcontentloaded', timeout=TIMEOUT)
-    if not len(cookies_www):
+        await page.goto(DOMAIN_WWW, wait_until='load', timeout=TIMEOUT)
+    if not len(cookies):
         LOGGER.info(f'用户"{phone}"第一次登录，请手动获取验证码登录')
     else:
         login_flag = await is_login(page)
         if login_flag:
             LOGGER.info(f'用户"{phone}"已经登录过，无需再次登录')
-            return
+            return user
         LOGGER.warning(f'用户"{phone}" cookie过期，正在自动填充相关信息')
+    await page.wait_for_load_state('load')
     login_btn = page.locator('a.login-button').filter(visible=True).first
     await expect(login_btn).to_be_visible()
-    # 自动点击登录按钮
+    # 1. 自动点击登录按钮
     await login_btn.click()
     await asyncio.sleep(uniform(0.5, 2.5))
-    await page.wait_for_load_state('networkidle')
-    # 自动输入手机号码
+    await page.wait_for_load_state('load')
+    # 2. 自动输入手机号码
     await page.fill('input[name="normal-input"]', str(phone))
     await asyncio.sleep(uniform(0.5, 2.5))
-    await page.wait_for_load_state('networkidle')
-    # 自动同意协议
+    await page.wait_for_load_state('load')
+    # 3. 自动同意协议
     await page.click('span[class="web-login-confirm-info__checkbox"]')
-    # 手动点击获取验证码
-    async with USER_LOCK:
-        # TODO: 要不这里改成input，让用户在命令行输，而不是打开浏览器？
-        LOGGER.info(f'请手动获取用户"{phone}"的验证码并登录')
-        await page.pause()
-    cookies_www = await page.context.cookies(DOMAIN_WWW)
+    # 4. 自动点击获取验证码 确保每次只有一个协程点击
+    got_capcha = False
+    code = ''
+    while not got_capcha:
+        async with USER_LOCK:
+            await page.click('span.send-input')
+            # TODO: 要不这里改成input，让用户在命令行输，而不是打开浏览器？
+            LOGGER.info(f'已按下获取验证码按钮，请查看手机号"{phone}"的验证码')
+            LOGGER.info(f'')
+            while True:
+                code = input(f'请输入手机号"{phone}"收到的验证码，若长时间未收到验证码请输入"N"(大写)：')
+                if code == 'N':
+                    LOGGER.warning('未收到验证码，60s后将重新尝试')
+                    await asyncio.sleep(60)
+                    break
+                if code.isnumeric():
+                    got_capcha = True
+                    break
+                if not code.isnumeric():
+                    LOGGER.warning('验证码只能是数字')
+                    continue
+    await asyncio.sleep(uniform(0.5, 2.5))
+    LOGGER.info(f'手机号"{phone}"收到的验证码："{code}"')
+    # 5. 自动输入验证码
+    await page.fill('input.web-login-button-input__input', code)
+    await asyncio.sleep(uniform(0.5, 2.5))
+    # 6. 按下登录
+    await page.click('button.web-login-button')
+    # 7. 获取www.toutiao.com的cookies
+    cookies = await page.context.cookies(DOMAIN_WWW)
     LOGGER.info(f'已获取到用户"{phone}"在"{DOMAIN_WWW}"的cookies')
     await asyncio.sleep(uniform(0.5, 2.5))
-    await page.wait_for_load_state('networkidle')
+    # 8. 跳转到mp.toutiao.com
     locator = page.locator('//a[text()="发布作品"]')
     await expect(locator).to_be_visible()
     await locator.click()
     LOGGER.info(f'正在跳转到"{DOMAIN_MP}"，并获取cookies')
     await page.wait_for_load_state('domcontentloaded')
-    # 由DOMAIN_WWW跳转到DOMAIN_MP
+    # 9. 获取mp.toutiao.com的cookies
     cookies_mp = await page.context.cookies(DOMAIN_MP)
     LOGGER.info(f'已获取到用户"{phone}"在"{DOMAIN_MP}"的cookies')
-    await update_cookies(conn, phone, [*cookies_www, *cookies_mp])
+    # 先插入用户
+    await insert_user(conn, user)
+    user.cookies = [*cookies, *cookies_mp]
+    # 再更新cookies
+    # 因为直接插入用户的话，如果数据库中已存在该用户，则会跳过插入逻辑
+    # 导致cookies未更新
+    await update_cookies(conn, phone, user.cookies)
+    return user
 
 
 async def upload_video(page: Page, user: User, video: Path) -> bool:
@@ -120,6 +153,7 @@ async def upload_video(page: Page, user: User, video: Path) -> bool:
         text = await modal_div.inner_text()
         if '账号信息未完善，暂时不能进行发布文章、视频等权益操作，请完善后重试' in text:
             LOGGER.warning(f'用户"{user.phone}"未实名认证，暂时无法上传视频')
+            await page.pause()
             return False
     # 有实名的话就乖乖等视频发布
     try:

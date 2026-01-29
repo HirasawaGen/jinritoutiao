@@ -2,11 +2,10 @@ from typing import Annotated as Annt
 import json
 
 from pydantic import BaseModel, Field
-import aiosqlite
 from aiosqlite import Connection
 
 from dao.dao_utils import relate_sql
-from playwright._impl._api_structures import Cookie, SetCookieParam
+from playwright._impl._api_structures import Cookie
 
 
 @relate_sql("""--sql
@@ -24,7 +23,7 @@ CREATE TABLE IF NOT EXISTS users (
     `cookies` JSON DEFAULT '[]'
 );
 """)
-async def create_table(sql: str, conn: Connection) -> None:
+async def create_table_users(sql: str, conn: Connection) -> None:
     await conn.execute(sql)
     await conn.commit()
 
@@ -36,8 +35,8 @@ class User(BaseModel):
 
 
 @relate_sql("""--sql
-INSERT
-INTO users (`phone`, `password`, `cookies`)
+INSERT OR IGNORE INTO
+users (`phone`, `password`, `cookies`)
 VALUES (?, ?, json(?));
 """)
 async def insert_user(sql: str, conn: Connection, user: User | str | int) -> bool:
@@ -68,7 +67,7 @@ async def user_pwd(sql: str, conn: Connection, phone: str | int) -> str | None:
     return row[0] if row else None
 
 
-# TODO: get_user(phone: str | int)  all_users()
+# TODO: get_user(phone: str | int)
 
 
 @relate_sql("""--sql

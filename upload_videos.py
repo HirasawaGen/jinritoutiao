@@ -10,7 +10,7 @@ from playwright._impl._api_structures import Cookie, SetCookieParam
 import aiosqlite
 
 from scrape.user import validate_cookies, upload_video
-from dao.user import create_table, all_users, insert_user, create_table
+from dao.user import create_table_users, all_users, insert_user, create_table_users
 from dao.user import User
 
 
@@ -35,7 +35,7 @@ async def main():
         # await insert_user(conn, 15929265379)
         # await insert_user(conn, 19565291025)
         browser: Browser = await p.chromium.launch(headless=False)
-        await create_table(conn)
+        await create_table_users(conn)
         users: list[User] = await all_users(conn)
         users = [user for user in users if user.phone.startswith('195')]
         user_pages: list[tuple[Page, User]] = []

@@ -10,4 +10,10 @@ wheels/
 .venv
 
 # Databases
-.db
+data.db
+
+# Configuration files
+config.yaml
+
+# phones
+phones.txt

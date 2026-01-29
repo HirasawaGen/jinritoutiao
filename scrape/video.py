@@ -37,9 +37,10 @@ def _a_tag2url(a_tag: Tag) -> str:
     return href
 
 
-async def search(page_queue: Queue[Page], keyword: str, page_num: int) -> list[str]:
+async def search_video(page_queue: Queue[Page], keyword: str, page_num: int) -> list[str]:
     '''
     根据给定的keyword和page_num搜索今日头条，返回搜索结果的url列表
+    FIXME: 直接访问可能会遇到反爬，这里改成从DOMAIN自动搜索，模拟人类操作
 
     :param page_queue: 页面队列
     :param keyword: 搜索关键词

@@ -6,7 +6,7 @@ from aiohttp import ClientSession
 from playwright.async_api import async_playwright
 from playwright.async_api import Browser, Page
 
-from scrape.video import search, fetch_download_link, download_https_video
+from scrape.video import search_video, fetch_download_link, download_https_video
 
 MAX_PAGES = 3
 AIO_HTTP_SEM = asyncio.Semaphore(3)
@@ -31,7 +31,7 @@ async def main():
             )
             await page_queue.put(page)
         search_tasks = [
-            search(page_queue, KEYWORD, PAGENUM)
+            search_video(page_queue, KEYWORD, PAGENUM)
         ]
         results = await asyncio.gather(*search_tasks)
         fetch_download_url_tasks = []
@@ -40,7 +40,6 @@ async def main():
                 fetch_download_url_tasks.append(fetch_download_link(page_queue, url))
         download_urls = await asyncio.gather(*fetch_download_url_tasks)
         await browser.close()
-
     async with ClientSession() as session:
         https_download_tasks = [
             download_https_video(session, url, Path('videos'))

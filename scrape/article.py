@@ -39,8 +39,8 @@ async def search_articles(
     '''
     if page_num < 0:
         return []
-    LOGGER.info(f'搜索 {category} 分类 {keyword} 第 {page_num+1} 页')
     async with queue_elem(page_queue) as page:
+        LOGGER.info(f'搜索 {category} 分类 {keyword} 第 {page_num+1} 页')
         await page.goto((
             f'https://{DOMAIN}/search'
             '?source=search_subtab_switch'

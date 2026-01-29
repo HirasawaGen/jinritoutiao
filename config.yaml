@@ -1,0 +1,7 @@
+playwright:
+  # playwright 一次最多打开多少个Page
+  max_pages_count: 3
+  # 搜索时的最大页码数
+  max_pages_idx: 5
+  # 超时时间
+  timeout: 3000000

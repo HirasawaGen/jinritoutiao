@@ -1,17 +1,19 @@
 import asyncio
-from asyncio import Lock
+from asyncio import Lock, Semaphore
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
-from random import uniform
+from random import uniform, randint
 
-from playwright.async_api import Page
+from playwright.async_api import Page, Browser
 from playwright.async_api import expect
 
 from aiosqlite import Connection
 
 from dao.user import User
 from dao.user import update_cookies, insert_user
+from dao.article import Article
 from utils import queue_elem, is_login
+from llm_utils import llm_rewrite
 
 
 DOMAIN_WWW = 'https://www.toutiao.com/'
@@ -22,6 +24,15 @@ USER_LOCK = Lock()  # 与用户的交互锁
 LOGGER = getLogger(__name__)
 LOGGER.setLevel('INFO')
 basicConfig(level=INFO)
+
+
+HEADERS = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/144.0.0.0 Safari/537.36 Edg/144.0.0.0',
+    'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.9',
+    # 'Host': 'so.toutiao.com',
+    'Referer': 'https://www.toutiao.com/',
+    'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6'
+}
 
 
 # TODO: add semaphore to limit concurrent requests
@@ -197,4 +208,91 @@ async def upload_video(page: Page, user: User, video: Path) -> bool:
     # 现在应该可以正式发布了
     await publish_span.click()
     # await page.pause()
+    return True
+
+
+async def upload_article(
+    browser: Browser,
+    user: User,
+    article: Article,
+    semaphore: Semaphore,
+    rewrite: bool = True
+) -> bool:
+    LOGGER.info(f'原文章链接：{article.url}')
+    LOGGER.info(f'原文章标题：{article.title}')
+    context = await browser.new_context()
+    cookies = user.cookies
+    await context.add_cookies(cookies)  # type: ignore
+    await context.set_extra_http_headers(HEADERS)
+    async with semaphore:
+        page = await context.new_page()
+        await page.goto(
+            f'{DOMAIN_MP}profile_v4/graphic/publish?from=toutiao_pc',
+            wait_until='networkidle',
+            timeout=TIMEOUT
+        )
+        # 第领步：关闭烦人的ai助手
+        close_btn = page.locator('svg.close-btn')
+        await close_btn.wait_for(state='visible')
+        await close_btn.click()
+        await asyncio.sleep(uniform(0.5, 2.5))
+        await page.wait_for_load_state('networkidle')
+        # 第一步：输入标题
+        await page.fill('div.editor-title textarea', article.title)
+        await asyncio.sleep(uniform(0.5, 2.5))
+        # 第二步：ai洗稿
+        content = article.content
+        if rewrite:
+            content = await llm_rewrite(article.content)
+        content = content.replace('```', '```\n\n\n')
+        # 第三步：输入正文
+        # FIXME: 直接fill的话，markdown格式就丢了。
+        # 试试用type
+        await page.type('div.ProseMirror', content, timeout=len(content)*60)
+        await asyncio.sleep(uniform(0.5, 2.5))
+        # 第四步：选择上传封面
+        cover_add = page.locator('div.article-cover-add')
+        await cover_add.wait_for(state='visible', timeout=TIMEOUT)
+        await cover_add.evaluate('(el) => el.click()')
+        await asyncio.sleep(uniform(0.5, 2.5))
+        await page.wait_for_load_state('networkidle')
+        # 第五步：点击今日头条的免费素材库
+        await page.click('div.byte-tabs-header-title:text-is("免费正版图片")')
+        await asyncio.sleep(uniform(0.5, 2.5))
+        await page.wait_for_load_state('networkidle')
+        # 第六步：输入关键字搜索图片
+        await page.fill('div.inp-search input', article.keyword)
+        await page.keyboard.press('Enter')
+        await asyncio.sleep(uniform(3.5, 5.5))
+        await page.wait_for_load_state('networkidle')
+        # 第七步：随机选择一个图片（修改后的逻辑）
+        # 先获取所有span.hover-icon元素的数量
+        hover_icons = page.locator("span.hover-icon")
+        # 获取元素总数
+        count = await hover_icons.count()
+        if count <= 0:
+            LOGGER.warning('未找到封面图片元素 span.hover-icon')
+            return False
+        nth = randint(0, count - 1)
+        # 根据随机索引选择元素
+        random_span = hover_icons.nth(nth)
+        await random_span.wait_for(state='attached')
+        await asyncio.sleep(uniform(0.5, 2.5))
+        await random_span.evaluate('(el) => el.click()')
+        await asyncio.sleep(uniform(0.5, 2.5))
+        await page.wait_for_load_state('networkidle')
+        await page.click('.ic-ui-search .byte-btn-primary')
+        await asyncio.sleep(uniform(3.5, 5.5))  # 这里比较慢 多等一会儿
+        await page.wait_for_load_state('networkidle')
+        # 第八步：点击发布按钮
+        publish_btn = page.locator('button.publish-btn-last')
+        # await expect(publish_btn).to_be_visible(timeout=30000)
+        for _ in range(3):
+            await publish_btn.evaluate('(el) => el.click()')
+            await asyncio.sleep(uniform(0.5, 2.5))
+            await page.wait_for_load_state('networkidle')
+        await asyncio.sleep(uniform(3.5, 5.5))  # 多等一会儿
+        await page.wait_for_load_state('networkidle')
+        # await page.pause()
+        await page.close()
     return True

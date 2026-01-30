@@ -9,12 +9,9 @@ from logging import getLogger, basicConfig, INFO
 import yaml
 
 from scrape.article import search_articles, fetch_article_info
-from dao.article import all_articles
+from dao.article import all_articles, create_table_article
 
 
-MAX_PAGE_COUNT = 3
-CATEGORY = "体育"
-KEYWORD = "篮球"
 HEADLESS = False
 
 LOGGER = getLogger(__name__)
@@ -46,6 +43,7 @@ async def main():
         async_playwright() as p,
         connect('data.db') as conn,
     ):
+        await create_table_article(conn)
         browser: Browser = await p.chromium.launch(headless=HEADLESS)
         context = await browser.new_context()
         context.set_default_timeout(playwright_config['timeout'])

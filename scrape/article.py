@@ -36,6 +36,8 @@ async def search_articles(
     :param category: 分类
     :param keyword: 关键字
     :param page_num: 页码 (从0开始)
+
+    FIXME: 如果是不存在的页数，那也是a_tags只有两个元素，但是代码里错误地被认为是遇到反爬，需要修复
     '''
     if page_num < 0:
         return []
@@ -114,6 +116,7 @@ async def fetch_article_info(
     '''
     获取搜索到的文章的详情，并更新数据库
 
+    FIXME: 如果content是空的 就是遇到反爬了 需要修复
     :param page_queue: 页面队列
     :param conn: 数据库连接
     :param article: 文章

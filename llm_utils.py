@@ -1,4 +1,5 @@
 import asyncio
+from logging import getLogger, INFO, basicConfig
 
 from openai import AsyncOpenAI
 import yaml
@@ -11,6 +12,8 @@ from dao.article import all_articles
 SEM = asyncio.Semaphore(3)  # 限制并发量为 3
 CONFIG = yaml.safe_load(open("llm_config.yaml", "r", encoding="utf-8"))
 
+LOGGER = getLogger(__name__)
+basicConfig(level=INFO)
 
 REWRITE_PROMPT = """
 请你完成以下文章的洗稿工作，要求如下：
@@ -22,8 +25,13 @@ REWRITE_PROMPT = """
 需要洗稿的原文：
 """
 
+CLIENT = AsyncOpenAI(
+    api_key=CONFIG['api_key'],
+    base_url=CONFIG['base_url']
+)
 
-async def llm_rewrite(client: AsyncOpenAI, article: str) -> str:
+
+async def llm_rewrite(article: str) -> str:
     """
     异步调用豆包 1.6 Flash 版本完成文章洗稿（LLM Rewrite）
 
@@ -34,7 +42,8 @@ async def llm_rewrite(client: AsyncOpenAI, article: str) -> str:
     try:
         # 异步调用聊天完成接口
         async with SEM:
-            completion = await client.chat.completions.create(
+            LOGGER.info(f"开始调用 LLM Rewrite API 进行文章洗稿：{article[:20]}……{article[-20:]}")
+            completion = await CLIENT.chat.completions.create(
                 model=CONFIG['model'],  # 指定豆包1.6 Flash模型
                 messages=[
                     {
@@ -60,11 +69,6 @@ async def llm_rewrite(client: AsyncOpenAI, article: str) -> str:
 async def main():
     # 1. 加载 YAML 配置
     # 2. 初始化 AsyncOpenAI 客户端（基于 YAML 配置）
-    async_client = AsyncOpenAI(
-        api_key=CONFIG['api_key'],
-        base_url=CONFIG['base_url']
-    )
-
     async with connect('data.db') as conn:
         articles = await all_articles(conn)
 
@@ -74,7 +78,7 @@ async def main():
     ]
 
     tasks = [
-        llm_rewrite(async_client, article.content)
+        llm_rewrite(article.content)
         for article in articles
     ]
 

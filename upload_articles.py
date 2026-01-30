@@ -2,8 +2,6 @@ import asyncio
 from asyncio import Semaphore
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
-from itertools import product
-import random
 
 from playwright.async_api import async_playwright
 from aiosqlite import connect
@@ -63,8 +61,9 @@ async def main():
             results = await asyncio.gather(*upload_tasks, return_exceptions=True)
             for user, result in zip(users, results):
                 if result == True:
-                    continue
-                LOGGER.error(f'用户 {user.phone} 上传文章 {article.title} 失败：{result}')
+                    LOGGER.info(f'用户 {user.phone} 上传文章 {article.title} 成功')
+                else:
+                    LOGGER.error(f'用户 {user.phone} 上传文章 {article.title} 失败：{result}')
                 
                 
 

@@ -3,6 +3,7 @@ from asyncio import Lock, Semaphore
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
 from random import uniform, randint
+import re
 
 from playwright.async_api import Page, Browser
 from playwright.async_api import expect
@@ -13,7 +14,7 @@ from dao.user import User
 from dao.user import update_cookies, insert_user
 from dao.article import Article
 from utils import queue_elem, is_login
-from llm_utils import llm_rewrite
+from llm_utils import llm_rewrite_content, llm_rewrite_title
 
 
 DOMAIN_WWW = 'https://www.toutiao.com/'
@@ -238,13 +239,17 @@ async def upload_article(
         await asyncio.sleep(uniform(0.5, 2.5))
         await page.wait_for_load_state('networkidle')
         # 第一步：输入标题
+        if rewrite:
+            article.title = await llm_rewrite_title(article.title)
         await page.fill('div.editor-title textarea', article.title)
         await asyncio.sleep(uniform(0.5, 2.5))
         # 第二步：ai洗稿
         content = article.content
         if rewrite:
-            content = await llm_rewrite(article.content)
+            content = await llm_rewrite_content(article.content)
         content = content.replace('```', '```\n\n\n')
+        content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+        content = re.sub(r'\[.*?\]\(.*?\)', '', content)
         # 第三步：输入正文
         # FIXME: 直接fill的话，markdown格式就丢了。
         # 试试用type

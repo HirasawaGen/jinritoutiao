@@ -1,11 +1,13 @@
 import asyncio
+from typing import AsyncGenerator
 from asyncio import Lock, Semaphore
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
 from random import uniform, randint
+from contextlib import asynccontextmanager
 import re
 
-from playwright.async_api import Page, Browser
+from playwright.async_api import Page, Browser, BrowserContext
 from playwright.async_api import expect
 
 from aiosqlite import Connection
@@ -13,14 +15,14 @@ from aiosqlite import Connection
 from dao.user import User
 from dao.user import update_cookies, insert_user
 from dao.article import Article
-from utils import queue_elem, is_login
-from llm_utils import llm_rewrite_content, llm_rewrite_title
+from utils import is_login
+from llm_utils import llm_rewrite_content, llm_rewrite_title, llm_rewrite_article
 
 
 DOMAIN_WWW = 'https://www.toutiao.com/'
 DOMAIN_MP = 'https://mp.toutiao.com/'
 TIMEOUT = 1000000
-USER_LOCK = Lock()  # 与用户的交互锁
+TERMINAL_LOCK = Lock()  # 与用户的交互锁
 
 LOGGER = getLogger(__name__)
 LOGGER.setLevel('INFO')
@@ -34,6 +36,102 @@ HEADERS = {
     'Referer': 'https://www.toutiao.com/',
     'Accept-Language': 'zh-CN,zh;q=0.9,en;q=0.8,en-GB;q=0.7,en-US;q=0.6'
 }
+
+
+# 限制每个账号同一时刻只能对应一个context
+user_locks: dict[str, Lock] = {}
+
+
+@asynccontextmanager
+async def user_context(
+    user: User,
+    browser: Browser,
+    extra_headers: dict | None = None
+) -> AsyncGenerator[BrowserContext, None]:
+    '''
+    通过用户的cookies登录，获取其对应的BrowserContext对象
+
+    如果用户cookies为空，则返回一个无额外cookies的context
+
+    NOTE: 如果用户的cookies过期，改函数不会报错，也不会警告，请注意。
+
+    :param user: 用户对象
+    :param browser: 浏览器对象
+    :param extra_headers: 额外的请求头
+    :return: 携带用户信息的BrowserContext对象
+    '''
+    phone = user.phone
+    if phone not in user_locks:
+        user_locks[phone] = Lock()
+    lock = user_locks[phone]
+    async with lock:
+        context = await browser.new_context(no_viewport=True)
+        if extra_headers is not None:
+            await context.set_extra_http_headers(extra_headers)
+        if not len(user.cookies):
+            LOGGER.warning(f'用户"{phone}"的cookies为空，请先登录获取')
+            yield context
+        else:
+            await context.add_cookies(user.cookies)   # type: ignore[arg-type]
+            yield context
+        await context.close()
+
+
+@asynccontextmanager
+async def user_page(
+    user: User,
+    browser: Browser,
+    *,
+    extra_headers: dict | None = None,
+) -> AsyncGenerator[Page, None]:
+    '''
+    通过用户的cookies登录，获取其对应的Page对象
+
+    其实就是对user_context的封装，只是返回值是Page对象
+
+    :param user: 用户对象
+    :param browser: 浏览器对象
+    :param extra_headers: 额外的请求头
+    :return: 携带用户信息的Page对象
+    '''
+    async with user_context(user, browser, extra_headers) as context:
+        page = await context.new_page()
+        yield page
+        await page.close()
+
+
+@asynccontextmanager
+async def user_multi_pages(
+    user: User,
+    browser: Browser,
+    num: int,
+    extra_headers: dict | None = None,
+) -> AsyncGenerator[list[Page], None]:
+    '''
+    通过用户的cookies登录，获取其对应的Page对象列表
+
+    其实就是对user_context的封装，只是返回值是Page对象列表
+
+    老实说，我现在还不知道这个manager在哪里能用到
+
+    但是也就几行，先写了再说
+
+    :param user: 用户对象
+    :param browser: 浏览器对象
+    :param extra_headers: 额外的请求头
+    :return: 携带用户信息的Page对象列表
+    '''
+    async with user_context(user, browser, extra_headers) as context:
+        pages = await asyncio.gather(*[
+            context.new_page()
+            for _ in range(num)
+        ], return_exceptions=True)
+        pages = [page for page in pages if isinstance(page, Page)]
+        yield pages
+        await asyncio.gather(*[
+            page.close()
+            for page in pages
+        ])
 
 
 # TODO: add semaphore to limit concurrent requests
@@ -78,7 +176,7 @@ async def validate_cookies(page: Page, user: User, conn: Connection) -> User:
     got_capcha = False
     code = ''
     while not got_capcha:
-        async with USER_LOCK:
+        async with TERMINAL_LOCK:
             await page.click('span.send-input')
             # TODO: 要不这里改成input，让用户在命令行输，而不是打开浏览器？
             LOGGER.info(f'已按下获取验证码按钮，请查看手机号"{phone}"的验证码')
@@ -300,4 +398,67 @@ async def upload_article(
         await page.wait_for_load_state('networkidle')
         # await page.pause()
         await page.close()
+    return True
+
+
+async def upload_微头条(
+    browser: Browser,
+    user: User,
+    article: Article,
+    semaphore: Semaphore,
+    rewrite: bool = True,
+    extra_headers: dict | None = None,
+) -> bool:
+    '''
+    虽然中文当函数名是非常不pythonic的行为
+
+    但是“微头条”如果翻译成"micro-blog"或者用拼音"weitoutiao"，
+    都可能会让人不知所云。所以我在这里使用了中文
+    '''
+    
+    async with (
+        semaphore,
+        user_page(
+            user,
+            browser,
+            extra_headers=extra_headers,
+        ) as page,
+    ):
+        
+        LOGGER.info(f'用户"{user.phone}"正在上传微头条文章')
+        LOGGER.info(f'原文章链接：{article.url}')
+        LOGGER.info(f'原文章标题：{article.title}')
+        if rewrite:
+            LOGGER.info(f'用户"{user.phone}"进行洗稿')
+            article = await llm_rewrite_article(
+                article,
+                rewrite_title=False,
+            )
+            LOGGER.info(f'用户"{user.phone}"洗稿成功')
+        await page.goto(
+            f'{DOMAIN_MP}profile_v4/weitoutiao/publish?from=toutiao_pc',
+            wait_until='domcontentloaded',
+        )
+        content = article.content
+        content = content.replace('```', '```\n\n\n')
+        content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+        content = re.sub(r'\[.*?\]\(.*?\)', '', content)
+        editot_region = page.locator('div.ProseMirror')
+        await editot_region.wait_for(state='visible')
+        await editot_region.fill(
+            content[:2000],
+        )
+        await asyncio.sleep(uniform(0.5, 2.5))
+        await page.wait_for_load_state('networkidle')
+        retry_count = 3
+        for _ in range(retry_count):
+            await page.click('button.publish-content')
+            await asyncio.sleep(uniform(3.5, 5.5))
+            if 'publish' not in page.url:
+                LOGGER.info(f'用户"{user.phone}"的微头条文章"{article.title}"发布成功')
+                return True
+            else:
+                LOGGER.warning(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，正在重试')
+        LOGGER.error(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，重试{retry_count}次后仍失败')
+        return False
     return True

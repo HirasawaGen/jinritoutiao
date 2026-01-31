@@ -2,6 +2,7 @@ import asyncio
 from asyncio import Semaphore
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
+from itertools import batched
 
 from playwright.async_api import async_playwright
 from aiosqlite import connect
@@ -11,7 +12,7 @@ from dao.user import User
 from dao.article import Article
 from dao.user import all_users
 from dao.article import all_articles
-from scrape.user import upload_article
+from scrape.user import upload_微头条
 
 
 
@@ -37,35 +38,46 @@ async def main():
         return
     config = yaml.safe_load(config_file.read_text(encoding='utf-8'))
     playwright_config = config.get('playwright', {})
-    async with (
-        async_playwright() as p,
-        connect('data.db') as conn,
-    ):
-        browser = await p.chromium.launch(headless=HEADLESS)
+    async with connect('data.db') as conn:
         users: list[User] = await all_users(conn)
         articles: list[Article] = await all_articles(conn)
-        articles = [
-            article for article in articles
-            if len(article.content) > 100
-            and article.uploader_fans_count < 100000
-        ]
+    articles = [
+        article for article in articles
+        if len(article.content) > 100
+        and article.uploader_fans_count < 100000
+    ]
+    batched_articles = batched(
+        articles,
+        n = len(articles) // len(users) + 1
+    )
+    # print(len(list(batched_articles)), len(users))
+    async with (
+        async_playwright() as p,
+    ):
+        browser = await p.chromium.launch(
+            headless=HEADLESS,
+            args=[
+                '--no-sandbox',
+                '--disable-setuid-sandbox',
+                '--start-maximized',
+            ]
+        )
         # users = users[:1]
         # articles = [random.choice(articles)]
         # articles = articles[:8]
+        tasks = []
         semaphore = Semaphore(playwright_config['max_pages_count'])
-        for article in articles:
-            upload_tasks = [
-                upload_article(browser, user, article, semaphore)
-                for user in users
-            ]
-            results = await asyncio.gather(*upload_tasks, return_exceptions=True)
-            for user, result in zip(users, results):
-                if result == True:
-                    LOGGER.info(f'用户 {user.phone} 上传文章 {article.title} 成功')
-                else:
-                    LOGGER.error(f'用户 {user.phone} 上传文章 {article.title} 失败：{result}')
-                
-                
+        for user, user_articles in zip(users, batched_articles):
+            LOGGER.info(f'为用户 {user.phone} 分配了 {len(user_articles)} 篇文章')
+            tasks.extend([upload_微头条(
+                browser,
+                user,
+                article,
+                semaphore,
+                extra_headers=HEADERS,
+            )
+            for article in user_articles])
+        await asyncio.gather(*tasks)
 
 
 if __name__ == '__main__':

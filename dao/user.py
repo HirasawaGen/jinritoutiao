@@ -81,3 +81,24 @@ async def all_users(sql, conn: Connection) -> list[User]:
         password=row[1],
         cookies=json.loads(row[2])
     ) for row in rows]
+
+
+
+@relate_sql("""--sql
+SELECT `phone`, `password`, `cookies` FROM users WHERE `phone` = ?;
+""")
+async def get_user(sql: str, conn: Connection, phone: str | int) -> User | None:
+    '''
+    通过手机号获取用户信息
+    :param phone: 手机号
+    :return: User对象
+    '''
+    cur = await conn.execute(sql, (phone,))
+    row = await cur.fetchone()
+    if not row:
+        return None
+    return User(
+        phone=row[0],
+        password=row[1],
+        cookies=json.loads(row[2])
+    )

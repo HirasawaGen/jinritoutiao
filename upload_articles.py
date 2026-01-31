@@ -3,6 +3,7 @@ from asyncio import Semaphore
 from pathlib import Path
 from logging import getLogger, basicConfig, INFO
 from itertools import batched
+from random import shuffle
 
 from playwright.async_api import async_playwright
 from aiosqlite import connect
@@ -77,7 +78,8 @@ async def main():
                 extra_headers=HEADERS,
             )
             for article in user_articles])
-        await asyncio.gather(*tasks)
+        shuffle(tasks)
+        await asyncio.gather(*tasks, return_exceptions=True)
 
 
 if __name__ == '__main__':

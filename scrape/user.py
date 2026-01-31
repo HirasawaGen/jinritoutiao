@@ -415,7 +415,12 @@ async def upload_微头条(
     但是“微头条”如果翻译成"micro-blog"或者用拼音"weitoutiao"，
     都可能会让人不知所云。所以我在这里使用了中文
     '''
-    
+    if rewrite:
+        article = await llm_rewrite_article(
+            article,
+            rewrite_title=False,
+        )
+        LOGGER.info(f'用户"{user.phone}"洗稿成功')
     async with (
         semaphore,
         user_page(
@@ -428,13 +433,7 @@ async def upload_微头条(
         LOGGER.info(f'用户"{user.phone}"正在上传微头条文章')
         LOGGER.info(f'原文章链接：{article.url}')
         LOGGER.info(f'原文章标题：{article.title}')
-        if rewrite:
-            LOGGER.info(f'用户"{user.phone}"进行洗稿')
-            article = await llm_rewrite_article(
-                article,
-                rewrite_title=False,
-            )
-            LOGGER.info(f'用户"{user.phone}"洗稿成功')
+        
         await page.goto(
             f'{DOMAIN_MP}profile_v4/weitoutiao/publish?from=toutiao_pc',
             wait_until='domcontentloaded',

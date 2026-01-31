@@ -63,9 +63,9 @@ async def main():
                 '--start-maximized',
             ]
         )
-        # users = users[:1]
+        users = users[:3]
         # articles = [random.choice(articles)]
-        # articles = articles[:8]
+        articles = articles[:128]
         tasks = []
         semaphore = Semaphore(playwright_config['max_pages_count'])
         for user, user_articles in zip(users, batched_articles):

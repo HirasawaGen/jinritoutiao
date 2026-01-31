@@ -415,49 +415,49 @@ async def upload_微头条(
     但是“微头条”如果翻译成"micro-blog"或者用拼音"weitoutiao"，
     都可能会让人不知所云。所以我在这里使用了中文
     '''
-    if rewrite:
-        article = await llm_rewrite_article(
-            article,
-            rewrite_title=False,
-        )
-        LOGGER.info(f'用户"{user.phone}"洗稿成功')
+    
     async with (
         semaphore,
-        user_page(
+    ):
+        if rewrite:
+            article = await llm_rewrite_article(
+                article,
+                rewrite_title=False,
+            )
+            LOGGER.info(f'用户"{user.phone}"洗稿成功')
+        async with user_page(
             user,
             browser,
             extra_headers=extra_headers,
-        ) as page,
-    ):
-        
-        LOGGER.info(f'用户"{user.phone}"正在上传微头条文章')
-        LOGGER.info(f'原文章链接：{article.url}')
-        LOGGER.info(f'原文章标题：{article.title}')
-        
-        await page.goto(
-            f'{DOMAIN_MP}profile_v4/weitoutiao/publish?from=toutiao_pc',
-            wait_until='domcontentloaded',
-        )
-        content = article.content
-        content = content.replace('```', '```\n\n\n')
-        content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
-        content = re.sub(r'\[.*?\]\(.*?\)', '', content)
-        editot_region = page.locator('div.ProseMirror')
-        await editot_region.wait_for(state='visible')
-        await editot_region.fill(
-            content[:2000],
-        )
-        await asyncio.sleep(uniform(0.5, 2.5))
-        await page.wait_for_load_state('networkidle')
-        retry_count = 3
-        for _ in range(retry_count):
-            await page.click('button.publish-content')
-            await asyncio.sleep(uniform(3.5, 5.5))
-            if 'publish' not in page.url:
-                LOGGER.info(f'用户"{user.phone}"的微头条文章"{article.title}"发布成功')
-                return True
-            else:
-                LOGGER.warning(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，正在重试')
-        LOGGER.error(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，重试{retry_count}次后仍失败')
-        return False
+        ) as page:
+            LOGGER.info(f'用户"{user.phone}"正在上传微头条文章')
+            LOGGER.info(f'原文章链接：{article.url}')
+            LOGGER.info(f'原文章标题：{article.title}')
+            
+            await page.goto(
+                f'{DOMAIN_MP}profile_v4/weitoutiao/publish?from=toutiao_pc',
+                wait_until='domcontentloaded',
+            )
+            content = article.content
+            content = content.replace('```', '```\n\n\n')
+            content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
+            content = re.sub(r'\[.*?\]\(.*?\)', '', content)
+            editot_region = page.locator('div.ProseMirror')
+            await editot_region.wait_for(state='visible')
+            await editot_region.fill(
+                content[:2000],
+            )
+            await asyncio.sleep(uniform(0.5, 2.5))
+            await page.wait_for_load_state('networkidle')
+            retry_count = 3
+            for _ in range(retry_count):
+                await page.click('button.publish-content')
+                await asyncio.sleep(uniform(3.5, 5.5))
+                if 'publish' not in page.url:
+                    LOGGER.info(f'用户"{user.phone}"的微头条文章"{article.title}"发布成功')
+                    return True
+                else:
+                    LOGGER.warning(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，正在重试')
+            LOGGER.error(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，重试{retry_count}次后仍失败')
+            return False
     return True

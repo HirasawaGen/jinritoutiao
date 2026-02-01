@@ -44,8 +44,9 @@ async def main():
         articles: list[Article] = await all_articles(conn)
     articles = [
         article for article in articles
-        if len(article.content) > 100
+        if len(article.content) > 200
         and article.uploader_fans_count < 100000
+        and article.category != '游戏'
     ]
     batched_articles = batched(
         articles,
@@ -60,6 +61,7 @@ async def main():
             args=[
                 '--no-sandbox',
                 '--disable-setuid-sandbox',
+                "--disable-blink-features=AutomationControlled",
                 '--start-maximized',
             ]
         )

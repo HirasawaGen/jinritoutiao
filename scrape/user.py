@@ -9,6 +9,7 @@ import re
 
 from playwright.async_api import Page, Browser, BrowserContext
 from playwright.async_api import expect
+from playwright_stealth.stealth import Stealth
 
 from aiosqlite import Connection
 
@@ -39,7 +40,7 @@ HEADERS = {
 
 
 # 限制每个账号同一时刻只能对应一个context
-user_locks: dict[str, Lock] = {}
+USER_LOCKS: dict[str, Lock] = {}
 
 
 @asynccontextmanager
@@ -61,9 +62,9 @@ async def user_context(
     :return: 携带用户信息的BrowserContext对象
     '''
     phone = user.phone
-    if phone not in user_locks:
-        user_locks[phone] = Lock()
-    lock = user_locks[phone]
+    if phone not in USER_LOCKS:
+        USER_LOCKS[phone] = Lock()
+    lock = USER_LOCKS[phone]
     async with lock:
         context = await browser.new_context(no_viewport=True)
         if extra_headers is not None:
@@ -94,8 +95,10 @@ async def user_page(
     :param extra_headers: 额外的请求头
     :return: 携带用户信息的Page对象
     '''
+    stealth = Stealth()
     async with user_context(user, browser, extra_headers) as context:
         page = await context.new_page()
+        await stealth.apply_stealth_async(page)
         yield page
         await page.close()
 
@@ -410,6 +413,8 @@ async def upload_微头条(
     extra_headers: dict | None = None,
 ) -> bool:
     '''
+    FIXME: 如果屏幕不够大，就会有个巨恶心的发文助手挡住发布按钮
+
     虽然中文当函数名是非常不pythonic的行为
 
     但是“微头条”如果翻译成"micro-blog"或者用拼音"weitoutiao"，
@@ -438,26 +443,30 @@ async def upload_微头条(
                 f'{DOMAIN_MP}profile_v4/weitoutiao/publish?from=toutiao_pc',
                 wait_until='domcontentloaded',
             )
+
             content = article.content
             content = content.replace('```', '```\n\n\n')
             content = re.sub(r'!\[.*?\]\(.*?\)', '', content)
             content = re.sub(r'\[.*?\]\(.*?\)', '', content)
             editot_region = page.locator('div.ProseMirror')
             await editot_region.wait_for(state='visible')
-            await editot_region.fill(
+            await editot_region.type(
                 content[:2000],
+                timeout=2000*30,
             )
             await asyncio.sleep(uniform(0.5, 2.5))
             await page.wait_for_load_state('networkidle')
             retry_count = 3
-            for _ in range(retry_count):
+            i = 0
+            for i in range(retry_count):
                 await page.click('button.publish-content')
                 await asyncio.sleep(uniform(3.5, 5.5))
                 if 'publish' not in page.url:
                     LOGGER.info(f'用户"{user.phone}"的微头条文章"{article.title}"发布成功')
-                    return True
+                    break
                 else:
                     LOGGER.warning(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，正在重试')
-            LOGGER.error(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，重试{retry_count}次后仍失败')
-            return False
+            if i == retry_count - 1:
+                LOGGER.error(f'用户"{user.phone}"的微头条文章"{article.title}"发布失败，重试{retry_count}次后仍失败')
+        await asyncio.sleep(uniform(3*60, 5*60))  # 等待3-5分钟
     return True

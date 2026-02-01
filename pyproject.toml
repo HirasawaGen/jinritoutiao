@@ -9,6 +9,7 @@ dependencies = [
     "aiohttp>=3.13.3",
     "aiosqlite>=0.22.1",
     "bs4>=0.0.2",
+    "jieba>=0.42.1",
     "lxml>=6.0.2",
     "markdownify>=1.2.2",
     "openai>=2.16.0",
@@ -16,5 +17,6 @@ dependencies = [
     "playwright>=1.57.0",
     "playwright-stealth>=2.0.1",
     "pyyaml>=6.0.3",
+    "rapidfuzz>=3.14.3",
     "videofetch>=0.6.1",
 ]

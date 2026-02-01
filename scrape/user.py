@@ -10,8 +10,8 @@ import re
 from playwright.async_api import Page, Browser, BrowserContext
 from playwright.async_api import expect
 from playwright_stealth.stealth import Stealth
-
 from aiosqlite import Connection
+from rapidfuzz import fuzz
 
 from dao.user import User
 from dao.user import update_cookies, insert_user
@@ -424,11 +424,27 @@ async def upload_微头条(
     async with (
         semaphore,
     ):
+        FUZZ_THRESH = 50.0
         if rewrite:
-            article = await llm_rewrite_article(
-                article,
-                rewrite_title=False,
-            )
+            origin_content = article.content
+            fuzz_ratio = 100.0
+            max_rewrite_times = 2
+            rewrite_success = False
+            for i in range(max_rewrite_times):
+                article = await llm_rewrite_article(
+                    article,
+                    rewrite_title=False,
+                )
+                fuzz_ratio = fuzz.ratio(article.content, origin_content)
+                LOGGER.info(f'用户"{user.phone}"的文章"{article.title}"洗稿后的重复度为{fuzz_ratio:.3f}%')
+                if fuzz_ratio < FUZZ_THRESH:
+                    rewrite_success = True
+                    break
+                else:
+                    LOGGER.info(f'用户"{user.phone}"的文章"{article.title}"重复度过高，正在重试')
+            if not rewrite_success:
+                LOGGER.warning(f'用户"{user.phone}"的文章"{article.title}"洗稿失败，重复度过高')
+                return False
             LOGGER.info(f'用户"{user.phone}"洗稿成功')
         async with user_page(
             user,

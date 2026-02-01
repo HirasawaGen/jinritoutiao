@@ -1,6 +1,9 @@
 import asyncio
+from typing import Callable, Concatenate, Awaitable
 from copy import deepcopy
 from logging import getLogger, INFO, basicConfig
+from pathlib import Path
+from functools import wraps
 
 from openai import AsyncOpenAI
 import yaml
@@ -21,6 +24,54 @@ CLIENT = AsyncOpenAI(
     api_key=CONFIG['api_key'],
     base_url=CONFIG['base_url']
 )
+
+
+def prompt[**P, R](
+    prompt_path: str | Path = ''
+) -> Callable[
+    [Callable[Concatenate[str, P], Awaitable[R]]],
+    Callable[P, Awaitable[R]]
+]:
+    '''
+    装饰器，用于指定 LLM Rewrite 接口的提示语
+    # TODO: 用jinja2会不会更好一些？
+    
+    :param prompt_path: 自定义提示语文件路径，默认为函数名.txt
+    :return: 装饰器
+    '''
+    def deco(
+        func: Callable[Concatenate[str, P], Awaitable[R]]
+    ) -> Callable[P, Awaitable[R]]:
+        nonlocal prompt_path
+        if isinstance(prompt_path, str):
+            if not len(prompt_path):
+                prompt_path = Path(f'{func.__name__}.txt')
+            else:
+                prompt_path = Path(prompt_path)
+        prompt_path = Path(__file__).parent / 'prompts' / prompt_path
+        if not prompt_path.exists():
+            LOGGER.error(f"提示语文件 {prompt_path} 不存在")
+            setattr(func, '__prompt__', '')
+        else:
+            with prompt_path.open('r', encoding='utf-8') as f:
+                setattr(func, '__prompt__', f.read())
+        @wraps(func)
+        async def wrapper(
+            *args: P.args,
+            **kwargs: P.kwargs
+        ) -> R:
+            return await func(
+                getattr(func, '__prompt__', ''),
+                *args,
+                **kwargs
+            )
+        return wrapper
+    return deco
+
+
+@prompt()
+async def test(prompt: str):
+    print(prompt)
 
 
 async def _llm_rewrite(content: str, prompt: str) -> str:
@@ -62,14 +113,15 @@ REWRITE_CONTENT_PROMPT = """
 """
 
 
-async def llm_rewrite_content(content: str) -> str:
+@prompt()
+async def llm_rewrite_content(prompt: str, content: str) -> str:
     """
     异步调用豆包 1.6 Flash 版本完成文章洗稿（LLM Rewrite）
 
     :param content: 需要洗稿的原文内容
     :return: 洗稿后的改写文章
     """
-    return await _llm_rewrite(content, REWRITE_CONTENT_PROMPT)
+    return await _llm_rewrite(content, prompt)
 
 
 REWRITE_TITLE_PROMPT = """
@@ -145,14 +197,18 @@ async def llm_rewrite_article(
 
 # 异步主函数（用于测试）
 async def main():
-    # 1. 加载 YAML 配置
-    # 2. 初始化 AsyncOpenAI 客户端（基于 YAML 配置）
+    from rapidfuzz import fuzz
     title = '玩原神救了我一命，我因此打败了抑郁症'
     content = '原神是一款充满奇妙魔法的游戏，玩家可以与神秘的怪物战斗，获得各种道具，打败怪物并收集各种材料，最终获得胜利。但玩家也会因为各种原因陷入抑郁症，导致无法正常游戏。'
     article = Article(title=title, content=content, id='1234567890', category='游戏', keyword='原神', url='https://www.bilibili.com/video/BV1xK411H74y')
-    article = await llm_rewrite_article(article, rewrite_content=True, rewrite_title=True)
-    print(article.title)
     print(article.content)
+    article = await llm_rewrite_article(article, rewrite_content=True, rewrite_title=False)
+    print(article.content)
+    print(fuzz.ratio(article.content, content))
+    article = await llm_rewrite_article(article, rewrite_content=True, rewrite_title=False)
+    print(article.content)
+    print(fuzz.ratio(article.content, content))
+
 
 
 # 启动异步程序

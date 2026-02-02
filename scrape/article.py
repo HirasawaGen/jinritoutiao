@@ -128,7 +128,11 @@ async def fetch_article_info(
     url = article.url
     LOGGER.info(f'获取文章 {article.id} 详情')
     async with queue_elem(page_queue) as page:
-        await page.goto(url, wait_until='networkidle', timeout=3000000)
+        await page.goto(url, wait_until='load', timeout=3000000)
+        if 'video' in page.url:
+            LOGGER.warning(f'该链接跳转到了一个视频，跳过')
+            return article
+        await page.wait_for_load_state('networkidle', timeout=3000000)
         html_content = await page.content()
         await asyncio.sleep(random.uniform(1.5, 3.5))
     soup = BeautifulSoup(html_content, 'lxml')

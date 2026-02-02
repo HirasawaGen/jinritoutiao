@@ -1,15 +1,20 @@
 import asyncio
 from asyncio import Queue
 from pathlib import Path
+from random import shuffle
+from typing import Awaitable
+from itertools import chain
 
 from playwright.async_api import async_playwright
 from playwright.async_api import Page, Browser, BrowserContext
+from playwright_stealth import Stealth
 from aiosqlite import connect
 from logging import getLogger, basicConfig, INFO
 import yaml
 
 from scrape.article import search_articles, fetch_article_info
-from dao.article import all_articles, create_table_article
+from dao.article import Article
+from dao.article import all_articles, create_table_article, get_articles
 
 
 HEADLESS = False
@@ -51,22 +56,29 @@ async def main():
         page_queue: Queue[Page] = Queue()
         for _ in range(playwright_config['max_pages_count']):
             page = await context.new_page()
+            stealth = Stealth()
+            await stealth.apply_stealth_async(page)
             await page_queue.put(page)
-        search_tasks = []
         for category, keywords in catg_keywords.items():
-            for keyword in keywords:
+            search_tasks: list[Awaitable[list[Article]]] = []
+            for i, keyword in enumerate(keywords):
+                exists = len(await get_articles(conn, category, keyword))
+                LOGGER.info(f'开始获取 {category} 分类第 {i+1}/{len(keywords)} 个关键字 {keyword} 文章')
+                if exists:
+                    LOGGER.info(f'已存在 {category} 分类 {keyword} 文章，跳过')
+                    continue
                 search_tasks.extend([search_articles(
                     page_queue,
                     conn, category, keyword, i
                 ) for i in range(playwright_config['max_pages_idx'])])
-        await asyncio.gather(*search_tasks)
-        articles = await all_articles(conn)
-        # articles = articles[:1]
-        tasks = [
-            fetch_article_info(page_queue, conn, article)
-            for article in articles
-        ]
-        await asyncio.gather(*tasks)
+                await asyncio.gather(*search_tasks, return_exceptions=True)
+            articles = await get_articles(conn, category)
+            fetch_tasks = [
+                fetch_article_info(page_queue, conn, article)
+                for article in articles
+            ]
+            shuffle(fetch_tasks)
+            await asyncio.gather(*fetch_tasks, return_exceptions=True)
 
 
 if __name__ == '__main__':

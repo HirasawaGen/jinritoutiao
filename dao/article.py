@@ -174,3 +174,67 @@ async def update_article(
     ))
     await conn.commit()
     return cur.rowcount > 0
+
+
+async def get_articles(
+    conn: Connection,
+    category: str = '',
+    keyword: str = '',
+) -> list[Article]:
+    '''
+    获取指定分类或关键词的文章
+    TODO: 其实可以和all_articles合并成一个
+    暂时先把这个屎山留着
+
+    注意：category和keyword不能同时为空
+
+    :param conn: 数据库连接
+    :param category: 分类
+    :param keyword: 关键词
+    :return: 文章列表
+    '''
+    if not len(category) and not len(keyword):
+        raise ValueError('category and keyword cannot both be empty')
+    cond = []
+    if len(category):
+        cond.append(f'`category` = "{category}"')
+    if len(keyword):
+        cond.append(f'`keyword` = "{keyword}"')
+    conds = 'AND '.join(cond)
+    sql = f"""--sql
+    SELECT
+        `id`,
+        `title`,
+        `url`,
+        `category`,
+        `keyword`,
+        `content`,
+        `upload_time`,
+        `like_count`,
+        `comment_count`,
+        `collect_count`,
+        `uploader`,
+        `uploader_fans_count`
+        FROM articles
+    WHERE {conds}
+    """
+    cur = await conn.execute(sql)
+    rows = await cur.fetchall()
+    articles = []
+    for row in rows:
+        article = Article(
+            id=row[0],
+            title=row[1],
+            url=row[2],
+            category=row[3],
+            keyword=row[4],
+            content=row[5],
+            upload_time=row[6],
+            like_count=row[7],
+            comment_count=row[8],
+            collect_count=row[9],
+            uploader=row[10],
+            uploader_fans_count=row[11]
+        )
+        articles.append(article)
+    return articles

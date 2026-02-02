@@ -126,21 +126,28 @@ async def fetch_article_info(
         LOGGER.info(f'文章 {article.id} 内容已获取，标题："{article.title[:20]}..." 跳过')
         return article
     url = article.url
+    retry_times = 3
     LOGGER.info(f'获取文章 {article.id} 详情')
     async with queue_elem(page_queue) as page:
-        await page.goto(url, wait_until='load', timeout=3000000)
-        if 'video' in page.url:
-            LOGGER.warning(f'该链接跳转到了一个视频，跳过')
+        await page.goto(url, wait_until='networkidle', timeout=3000000)
+        soup = None
+        article_soup = None
+        for i in range(retry_times):
+            if 'video' in page.url:
+                LOGGER.warning(f'该链接跳转到了一个视频，跳过')
+                return article
+            await page.wait_for_load_state('networkidle', timeout=3000000)
+            html_content = await page.content()
+            await asyncio.sleep(random.uniform(1.5, 3.5))
+            soup = BeautifulSoup(html_content, 'lxml')
+            # 第一步：获取文章内容并转为markdown
+            article_soup = soup.select_one('article.syl-article-base')
+            if article_soup is None:
+                LOGGER.warning(f'文章 {article.id} 内容为空')
+                LOGGER.warning(f'尝试重新获取 {i+1} 次')
+                await page.reload()
+        if article_soup is None or soup is None:
             return article
-        await page.wait_for_load_state('networkidle', timeout=3000000)
-        html_content = await page.content()
-        await asyncio.sleep(random.uniform(1.5, 3.5))
-    soup = BeautifulSoup(html_content, 'lxml')
-    # 第一步：获取文章内容并转为markdown
-    article_soup = soup.select_one('article.syl-article-base')
-    if article_soup is None:
-        LOGGER.warning(f'文章 {article.id} 内容为空')
-        return article
     markdown_content = markdownify(str(article_soup))
     article.content = markdown_content
     # 第二步：获取文章发布时间
